@@ -116,7 +116,12 @@ class Dienste(callbacks.Plugin):
                     irc.noReply()
 
     def spacestation(self, irc, msg, args):
-        response = requests.get('http://api.open-notify.org/iss-now.json').json()
+        response = requests.get('http://api.open-notify.org/iss-now.json')
+        if response.status_code==200:
+            response = response.json()
+        else:
+            print('Request returned status code: '+str(response.status_code))
+            return
         if 'message' not in response or response['message']!='success':
             irc.reply(str(response))
             irc.reply('Error receiving the location of the ISS')
@@ -156,7 +161,12 @@ class Dienste(callbacks.Plugin):
             'x-rapidapi-key': self.registryValue('rapidapikey'),
             'x-rapidapi-host': "geocodeapi.p.rapidapi.com"
         }
-        response = requests.request('GET',urlstring,headers=headers,params=querystring).json()
+        response = requests.request('GET',urlstring,headers=headers,params=querystring)
+        if response.status_code==200:
+            response = response.json()
+        else:
+            print('Distance api returned status code: '+str(response.status_code))
+            return
         if len(response)>0 and 'City' in response[0]:
             for i in range(2):
                 neareststring = 'The '
@@ -179,7 +189,12 @@ class Dienste(callbacks.Plugin):
             'x-rapidapi-host': "weatherapi-com.p.rapidapi.com"
         }
         querystring = {'q':'78666'}
-        response = requests.request('GET', url, headers=headers, params=querystring).json()
+        response = requests.request('GET', url, headers=headers, params=querystring)
+        if response.status_code==200:
+            response = response.json()
+        else:
+            print('Request returned status code: '+str(response.status_code))
+            return
         if 'current' in response:
             loc = response['location']
             cur = response['current']
@@ -204,6 +219,25 @@ class Dienste(callbacks.Plugin):
         else:
             irc.reply('Received bad response: '+str(response.status_code))
 
+    def randomquote(self, irc, msg, args):
+        url = "https://quotes15.p.rapidapi.com/quotes/random/"
+        headers = {
+            'x-rapidapi-key': self.registryValue('rapidapikey'),
+            'x-rapidapi-host': "quotes15.p.rapidapi.com"
+        }
+        response = requests.request("GET", url, headers=headers)
+        if response.status_code==200:
+            response = response.json()
+        else:
+            print('Request returned status code: '+str(response.status_code))
+            return
+        if 'content' in response:
+            thequotestr = '\"'+response['content']+'\"'
+            thequotestr = re.sub('\r','',thequotestr)
+            thequotestr = re.sub('\n',' ',thequotestr)
+            thequotestr+=' - '+response['originator']['name']
+            irc.reply(thequotestr)
+
     def numbermath(self, irc, msg, args):
         number=0
         if type(args) is not list or len(args)==0:
@@ -224,6 +258,20 @@ class Dienste(callbacks.Plugin):
             irc.reply('You must provide something to translate.')
             return
         try:
+            high=[0.0,0.0]
+            lang = ['','']
+            targetlang=''
+            if args[0][0]=='!':
+                args[0]=args[0][1:].split('-')
+                if len(args[0])==2:
+                    lang[0]=args[0][0]+'-'+args[0][1]
+                    high=[1,0]
+                else:
+                    targetlang=args[0][0]
+                args = args[1:]
+                if len(args)==0:
+                    irc.reply('You must provide something to translate.')
+                    return
             authenticator = IAMAuthenticator(self.registryValue('ibmapikey'))
             language_translator = LanguageTranslatorV3(
                 version='2018-05-01',
@@ -231,29 +279,41 @@ class Dienste(callbacks.Plugin):
             )
             language_translator.set_service_url('https://api.us-south.language-translator.watson.cloud.ibm.com')
             intext = ' '.join(args)
-            language = language_translator.identify(intext).get_result()
-            high=[0.0,0.0]
-            lang = ['','']
-            for i in range(len(language['languages'])):
-                if language['languages'][i]['confidence']>high[0]:
-                    high[1] = high[0]
-                    lang[1] = lang[0]
-                    high[0] = language['languages'][i]['confidence']
-                    lang[0] = language['languages'][i]['language']
-                elif language['languages'][i]['confidence']>high[1]:
-                    high[1] = language['languages'][i]['confidence']
-                    lang[1] = language['languages'][i]['language']
+            if lang[0]=='':
+                language = language_translator.identify(intext).get_result()
+                for i in range(len(language['languages'])):
+                    if language['languages'][i]['confidence']>high[0]:
+                        high[1] = high[0]
+                        lang[1] = lang[0]
+                        high[0] = language['languages'][i]['confidence']
+                        lang[0] = language['languages'][i]['language']
+                    elif language['languages'][i]['confidence']>high[1]:
+                        high[1] = language['languages'][i]['confidence']
+                        lang[1] = language['languages'][i]['language']
             for i in range(2):
                 if lang[i]=='':
                     continue
                 high[i]*=100
                 if high[i]<10:
                     continue
+                dolang=''
+                if targetlang!='':
+                    dolang=lang[i]+'-'+targetlang
+                elif lang[0]=='en':
+                    dolang='en-de'
+                elif '-' in lang[i]:
+                    dolang=lang[i]
+                else:
+                    dolang=lang[i]+'-en'
                 translation = language_translator.translate(
                     text=intext,
-                    model_id=lang[i]+('-en' if lang[i] !='en' else '-de')).get_result()
-                if lang[i]!='en':
+                    model_id=dolang).get_result()
+                if '-' in lang[i]: # explicit translation
+                    irc.reply('('+lang[i]+'): '+translation['translations'][0]['translation'])
+                elif lang[i]!='en':
                     irc.reply('('+lang[i]+' '+str(round(high[i],2))+'%): '+translation['translations'][0]['translation'])
+                elif targetlang!='':
+                    irc.reply('('+dolang+'): '+translation['translations'][0]['translation'])
                 else:
                     irc.reply('Auf Deutsch: ' + translation['translations'][0]['translation'])
         except ApiException as ex:
